@@ -9,7 +9,14 @@ const _path = process.cwd()
 // mac地址
 let mac = ""
 
+const INACTIVITY_TIMEOUT = 30 * 60 * 1000
+
 export default class Puppeteer extends Renderer {
+
+  private closeTimer = null
+
+  private isManualShutdown = false
+
   constructor(config) {
     super({
       id: "puppeteer",
@@ -42,6 +49,16 @@ export default class Puppeteer extends Renderer {
     this.puppeteerTimeout = config.puppeteerTimeout || cfg?.bot?.puppeteer_timeout || 0
   }
 
+  resetCloseTimer() {
+    if (this.closeTimer) {
+      clearTimeout(this.closeTimer)
+    }
+    this.closeTimer = setTimeout(() => {
+      this.isManualShutdown = true
+      this.stop(this.browser)
+    }, INACTIVITY_TIMEOUT)
+  }
+
   /**
    * 初始化chromium
    */
@@ -56,7 +73,7 @@ export default class Puppeteer extends Renderer {
     try {
       // 获取Mac地址
       if (!mac) {
-        mac = await this.getMac()
+        mac = this.getMac()
         this.browserMacKey = `Yz:chromium:browserWSEndpoint:${mac}`
       }
       // 是否有browser实例
@@ -67,6 +84,8 @@ export default class Puppeteer extends Renderer {
           // 如果有实例，直接使用
           if (browserWSEndpoint) {
             this.browser = browserWSEndpoint
+            // this.isManualShutdown = false
+            // this.resetCloseTimer()
             connectFlag = true
           }
           logger.info(`puppeteer Chromium 连接成功 ${browserUrl}`)
@@ -92,6 +111,8 @@ export default class Puppeteer extends Renderer {
         }
         logger.error(err, trace)
       })
+      // this.isManualShutdown = false
+      // this.resetCloseTimer()
     }
 
     this.lock = false
@@ -110,8 +131,13 @@ export default class Puppeteer extends Renderer {
     }
 
     /** 监听Chromium实例是否断开 */
-    this.browser.on("disconnected", () => this.restart(true))
-
+    this.browser.on("disconnected", () => {
+      if (!this.isManualShutdown) {
+        this.restart(true)
+      }
+    })
+    this.isManualShutdown = false
+    this.resetCloseTimer()
     return this.browser
   }
 
@@ -157,6 +183,7 @@ export default class Puppeteer extends Renderer {
   async screenshot(name, data = {}) {
     if (!await this.browserInit())
       return false
+    // this.resetCloseTimer()
     const pageHeight = data.multiPageHeight || 4000
 
     const savePath = this.dealTpl(name, data)
@@ -260,7 +287,7 @@ export default class Puppeteer extends Renderer {
     } catch (err) {
       logger.error(`[图片生成][${name}] 图片生成失败`, err)
       /** 关闭浏览器 */
-      this.restart(true)
+      await this.restart(true)
       if (overtime) clearTimeout(overtime)
       ret = []
       return false
@@ -290,9 +317,9 @@ export default class Puppeteer extends Renderer {
     return this.browserInit()
   }
 
-  async stop(browser) {
+  stop(browser) {
     try {
-      await browser.close()
+      browser.close()
     } catch (err) {
       logger.error("puppeteer Chromium 关闭错误", err)
     }
